@@ -1,0 +1,18 @@
+package shrike
+
+import shrike.router:*
+
+{@from shrike_0router import *@}
+
+@route("/")
+function hello(req as http_request) as string
+	return "HTTP/1.1 200 OK\r\n\r\nHello world"
+end
+
+@route("/birdee")
+function _birdee(req as http_request) as string
+	return "HTTP/1.1 200 OK\r\n\r\nBirdee is great"
+end
+
+{@generate()@}
+sync_server()

@@ -1,0 +1,113 @@
+package shrike
+
+import system.io.net:*
+import concurrent.threadpool:*
+import functional.option:*
+import concurrent.sync:*
+import concurrent.syncdef:future
+import extensions.string:*
+import hash:*
+
+{@from bdutils import *@}
+
+dim pool = new threadpool(4,100) # 4 threads, max 100 items
+dim router = new hash_map[string, closure(r as http_request) as string]
+
+class http_request
+	public uri as string
+	public uri_param as string
+	public method as string
+	public param as hash_map[string_view, string_view]
+end
+
+function bind_func(sok as socket) as closure()
+	return func ()
+		handle_connection(sok)
+	end
+end
+
+function handle_connection(sok as socket)
+	dim stream = new socket_input_stream(sok)
+	dim method = stream.next_token(" \t\r\n")
+	dim uri = stream.next_token(" \t")
+	dim port = stream.next_token(" \t\r\n")
+	dim qs as string=""
+	
+	dim qs_split = uri.find_char({@set_char("?")@},0)
+	if qs_split != -1 then
+		qs=*uri.view(qs_split + 1, uri.length() - 1 - qs_split )
+	end
+
+	println("Method="+method)
+	println("URI="+uri)
+	#println("Param="+qs)
+	println("Protocol="+port)
+
+	dim kvline = stream.get_line()
+	dim map = new hash_map[string_view, string_view]
+	while kvline.length()>2 # > "\r\n"
+		dim spl = kvline.find_char({@set_char(":")@},0)
+		dim k as string_view, v as string_view
+		if spl > 0 then
+			k=kvline.view(0, spl).trim()
+			if spl + 1 < kvline.length() then
+				v = kvline.view(spl + 1, kvline.length() - spl - 1).trim()
+			end
+		else
+			k=kvline.viewall().trim()
+		end
+		#println(*k + ":" + *v)
+		map.insert(k, v)
+		kvline = stream.get_line()
+	end
+	dim req = new http_request
+	req.uri = uri
+	req.uri_param=qs
+	req.method=method
+	req.param=map
+
+	dim itr = router.find(uri)
+	dim response as string
+	if itr!=router.ends() then
+		response = itr.getv()(req)
+	else
+		response = "HTTP/1.1 404 Not found\r\n\r\n"
+	end
+	println("Response: " + response)
+	sok.send(response.get_bytes(),0, response.length())
+	sok.close()
+
+end
+
+function sync_server()
+	dim server = new server_bind(10086)
+	while true
+		dim sok = server.accept()
+		pool.enqueue(bind_func(sok))
+	end
+	server.close()
+end
+
+
+function register(uri as string, f as closure(r as http_request) as string)
+	router.insert(uri, f)
+end
+
+@init_script
+{@
+myroute=dict()
+
+def route(uri):
+	def ret(func):
+		myroute[uri]=func
+	return ret
+
+def generate():
+	for uri in myroute:
+		func = myroute[uri]
+		print("Generating route: ", uri, "->", func.proto.name)
+		set_ast(
+			CallExprAST.new(expr("shrike.router.register"),
+			[StringLiteralAST.new(uri), ResolvedFuncExprAST.new(func)]
+		))
+@}
